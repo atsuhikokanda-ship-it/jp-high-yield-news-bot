@@ -9,6 +9,23 @@ def get_yield(symbol: str, key: str) -> float | None:
         return (js[0].get("dividendYieldTTM") or js[0].get("dividend_yield_ttm"))
     return None
 
+# src/high_yield.py の build_universe 冒頭に追記
+
+import os, json, requests, time
+
+def build_universe():
+    os.makedirs("data", exist_ok=True)  # ★ 念のため
+    master_path = "data/jpx_master.json"
+    if not os.path.exists(master_path):
+        raise FileNotFoundError(
+            f"{master_path} がありません。前のステップ 'Build JPX master' が成功しているかログを確認してください。"
+        )
+
+    key = os.environ["FMP_API_KEY"]
+    with open(master_path, "r", encoding="utf-8") as f:
+        master = json.load(f)
+    ...
+
 def build_universe():
     key = os.environ["FMP_API_KEY"]
     with open("data/jpx_master.json", "r", encoding="utf-8") as f:
