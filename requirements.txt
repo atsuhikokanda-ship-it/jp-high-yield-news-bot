@@ -1,0 +1,7 @@
+requests
+pandas
+openpyxl
+lxml
+feedparser
+rapidfuzz
+python-dateutil
