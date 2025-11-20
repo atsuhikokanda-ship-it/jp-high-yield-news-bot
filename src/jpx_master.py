@@ -1,5 +1,4 @@
-# src/jpx_master.py（download_latest_excel() を差し替え）
-
+# src/jpx_master.py
 import pandas as pd, re, requests, io, json
 from urllib.parse import urljoin
 
@@ -20,3 +19,29 @@ def download_latest_excel():
     else:
         # 既定では .xls → xlrd が必要
         return pd.read_excel(io.BytesIO(bin), engine="xlrd")
+
+def normalize_name(s: str) -> str:
+    import re
+    s = re.sub(r"[（）\(\)\s・･　]", "", s or "")
+    s = re.sub(r"(株式会社|（株）|Co\.?,?Ltd\.?|ホールディングス|HD)$", "", s, flags=re.I)
+    return s
+
+# src/jpx_master.py（最後の build_master を差し替え or 追記）
+
+import os
+def build_master():
+    df = download_latest_excel()
+    code_col = [c for c in df.columns if "コード" in c][0]
+    name_col = [c for c in df.columns if ("銘柄名" in c or "会社名" in c)][0]
+    out = []
+    for _, r in df.iterrows():
+        code = str(r[code_col]).split(".")[0].zfill(4)[:4]
+        if not code.isdigit():
+            continue
+        name = str(r[name_col])
+        out.append({"code": code, "name": name, "key": normalize_name(name)})
+
+    os.makedirs("data", exist_ok=True)  # ★ ここを追加
+    with open("data/jpx_master.json", "w", encoding="utf-8") as f:
+        json.dump(out, f, ensure_ascii=False, indent=2)
+    print(f"Saved data/jpx_master.json ({len(out)} rows)")  # ★ ログ
