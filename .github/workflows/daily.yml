@@ -1,0 +1,52 @@
+name: daily-post
+on:
+  schedule:
+    - cron: '0 23 * * *'   # JST 08:00（UTC+9）
+  workflow_dispatch:
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install -r requirements.txt
+
+      - name: Restore seen cache
+        id: cache-seen
+        uses: actions/cache@v4
+        with:
+          path: data/cache
+          key: seen-v1-${{ github.run_id }}
+          restore-keys: |
+            seen-v1-
+
+      - name: Ensure seen.json exists
+        run: |
+          mkdir -p data/cache
+          if [ ! -f data/cache/seen.json ]; then
+            echo "[]" > data/cache/seen.json
+          fi
+
+      - name: Build JPX master
+        run: python src/jpx_master.py
+
+      - name: Build high-yield universe (>=4%)
+        env:
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+        run: python src/high_yield.py
+
+      - name: Fetch RSS
+        run: python src/fetch_rss.py
+
+      - name: Summarize
+        run: python src/summarize.py
+
+      - name: Post to X (skip if none)
+        env:
+          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
+        run: python src/post_x.py
