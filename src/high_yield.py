@@ -1,12 +1,12 @@
+# src/high_yield.py
 import os, json, requests, time, datetime as dt
 
 API = "https://financialmodelingprep.com/stable"
 KEY = os.environ["FMP_API_KEY"]
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; Bot/1.0)"}
 
-# --- ユーティリティ ---
 def _get(url, params=None):
-    for i in range(3):  # 簡易リトライ
+    for i in range(3):
         try:
             r = requests.get(url, headers=HEADERS, params=params, timeout=30)
             r.raise_for_status()
@@ -19,21 +19,15 @@ def _get(url, params=None):
 def _quote_price(symbol: str) -> float | None:
     js = _get(f"{API}/quote", {"symbol": symbol, "apikey": KEY})
     if isinstance(js, list) and js:
-        # price or previousClose を順に採用
         p = js[0].get("price") or js[0].get("previousClose")
         return float(p) if p not in (None, "", 0) else None
     return None
 
-def _dividend_yield_from_dividends(symbol: str) -> float | None:
-    """
-    1) /dividends の最新レコードに 'yield' があればそれを採用
-    2) なければ過去365日の配当金を合計し、quote価格で割って利回り算出
-    """
+def _dividend_yield(symbol: str) -> float | None:
+    # /dividends → 最新の yield があれば採用。なければ365日合計÷価格
     js = _get(f"{API}/dividends", {"symbol": symbol, "apikey": KEY})
     if not js:
         return None
-
-    # 1) 最新レコードの yield フィールド
     latest = js[0] if isinstance(js, list) else None
     if latest and isinstance(latest, dict):
         y = latest.get("yield") or latest.get("dividendYield")
@@ -42,12 +36,9 @@ def _dividend_yield_from_dividends(symbol: str) -> float | None:
                 return float(y)
             except Exception:
                 pass
-
-    # 2) 直近365日の配当合計 ÷ 現値
     one_year_ago = dt.datetime.utcnow() - dt.timedelta(days=365)
     total_div = 0.0
     for row in js:
-        # row例: { 'date': '2025-03-29', 'dividend': 30.0, ... }
         d = row.get("date") or row.get("paymentDate") or ""
         amt = row.get("dividend") or row.get("adjDividend") or row.get("adjustedDividend")
         if not d or amt in (None, "", 0):
@@ -57,46 +48,83 @@ def _dividend_yield_from_dividends(symbol: str) -> float | None:
                 total_div += float(amt)
         except Exception:
             continue
-
     if total_div <= 0:
         return None
-
     px = _quote_price(symbol)
     if not px or px <= 0:
         return None
-
-    return total_div / px  # ← 例えば 0.045 (= 4.5%)
+    return total_div / px
 
 def build_universe():
-    # マスタ読込
     os.makedirs("data", exist_ok=True)
+    # マスタ
     with open("data/jpx_master.json", "r", encoding="utf-8") as f:
         master = json.load(f)
 
-    hi = []
-    cnt = 0
-    for i, row in enumerate(master, 1):
-        symbol = f'{row["code"]}.T'  # 日本株は多くが .T
+    # 旧キャッシュ
+    cache_path = "data/high_yield.json"
+    old = {}
+    if os.path.exists(cache_path):
+        with open(cache_path, "r", encoding="utf-8") as f:
+            for r in json.load(f):
+                old[r["code"]] = r
+
+    # 更新ポリシー設定
+    today = dt.datetime.now(dt.timezone.utc).astimezone(dt.timezone(dt.timedelta(hours=9)))  # JST相当
+    weekday = today.weekday()  # Mon=0 ... Sun=6
+    full_rebuild = (weekday == 6)  # 日曜はフル
+    # ローリング分割: 証券コード%7 == weekday のものだけ当日更新
+    def should_update(code: str) -> bool:
+        if full_rebuild:
+            return True
         try:
-            y = _dividend_yield_from_dividends(symbol)
-        except Exception as e:
-            # APIエラーはスキップして続行
-            y = None
+            return int(code) % 7 == weekday
+        except Exception:
+            return False
 
-        if y is not None and y >= 0.04:
-            hi.append({**row, "symbol": symbol, "yield": y})
+    updated = 0
+    result = []
+    for i, row in enumerate(master, 1):
+        code = row["code"]
+        symbol = f'{code}.T'
+        # 更新対象かどうか
+        if should_update(code):
+            try:
+                y = _dividend_yield(symbol)
+            except Exception:
+                y = None
+            rec = {**row, "symbol": symbol}
+            if y is not None:
+                rec["yield"] = y
+                rec["last_updated"] = today.isoformat()
+            else:
+                # APIで取れなかった場合は旧値があれば引き継ぐ
+                if code in old and "yield" in old[code]:
+                    rec["yield"] = old[code]["yield"]
+                    rec["last_updated"] = old[code].get("last_updated")
+            result.append(rec)
+            updated += 1
+            if i % 25 == 0:
+                time.sleep(0.8)
+        else:
+            # 当日は更新しない → キャッシュ優先
+            if code in old:
+                result.append(old[code])
+            else:
+                # キャッシュ未収載なら最低限の骨格のみ
+                result.append({**row, "symbol": symbol})
 
-        cnt += 1
-        if i % 25 == 0:
-            time.sleep(0.8)  # 無料枠対策でウェイト
+    # フィルタ（>=4%）
+    hi = [r for r in result if r.get("yield") is not None and r["yield"] >= 0.04]
 
-    with open("data/high_yield.json", "w", encoding="utf-8") as f:
-        json.dump(hi, f, ensure_ascii=False, indent=2)
+    with open(cache_path, "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
 
-    print(f"Checked: {cnt} symbols, High-yield (>=4%): {len(hi)}")
-    # デバッグしやすいよう、上位数件をログ出力
+    print(f"{'FULL' if full_rebuild else 'PARTIAL'} update; checked: {updated} / {len(master)}")
+    print(f"High-yield (>=4%): {len(hi)}")
     for s in hi[:10]:
-        print(f' - {s["code"]}.T  yield≈{round(s["yield"]*100,2)}%  {s["name"]}')
+        ypct = round(s['yield']*100, 2)
+        print(f' - {s["code"]}.T  yield≈{ypct}%  {s["name"]}')
 
 if __name__ == "__main__":
     build_universe()
