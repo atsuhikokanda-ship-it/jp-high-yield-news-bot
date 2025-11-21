@@ -57,6 +57,14 @@ def _dividend_yield(symbol: str) -> float | None:
 
 def build_universe():
     os.makedirs("data", exist_ok=True)
+    
+    # ★ ここから追加：日曜以外は実行しない（JST基準）
+    today_jst = dt.datetime.utcnow() + dt.timedelta(hours=9)
+    if today_jst.weekday() != 6:  # Monday=0 ... Sunday=6
+        print("Skip building universe today (run weekly on Sunday).")
+        return
+    # ★ 追加ここまで
+    
     # マスタ
     with open("data/jpx_master.json", "r", encoding="utf-8") as f:
         master = json.load(f)
