@@ -1,5 +1,3 @@
-# src/high_yield.py（全部入れ替え）
-
 import os, json
 
 def build_universe():
@@ -15,7 +13,6 @@ def build_universe():
     with open(manual_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    # 念のため4%以上のものだけにフィルタ（yield記入ミス防止）
     hi = [r for r in data if r.get("yield") is not None and r["yield"] >= 0.04]
 
     with open(out_path, "w", encoding="utf-8") as f:
