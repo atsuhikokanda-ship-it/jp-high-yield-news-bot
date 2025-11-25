@@ -36,8 +36,6 @@ jobs:
         run: python src/jpx_master.py
 
       - name: Build high-yield universe (>=4%)
-        env:
-          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
         run: python src/high_yield.py
 
       - name: Fetch RSS
