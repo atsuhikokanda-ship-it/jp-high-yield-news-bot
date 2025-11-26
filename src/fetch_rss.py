@@ -4,7 +4,6 @@ import re
 import time
 import datetime as dt
 from zoneinfo import ZoneInfo
-from rapidfuzz import fuzz
 from urllib.parse import urlparse
 
 FEEDS = [
@@ -15,28 +14,34 @@ FEEDS = [
 JST = ZoneInfo("Asia/Tokyo")
 
 
-def normalize_name(s: str) -> str:
-    """社名をあいまい一致用に正規化"""
+def normalize_text(s: str) -> str:
+    """ニュース本文用の簡易正規化（空白などを削る）"""
     s = s or ""
-    # 全角カッコ、空白、・などを削除
+    s = re.sub(r"\s+", "", s)
+    return s
+
+
+def normalize_name(s: str) -> str:
+    """社名を正規化（株式会社などを削る）"""
+    s = s or ""
+    # 全角カッコ、半角カッコ、空白、・などを除去
     s = re.sub(r"[（）\(\)\s・･　]", "", s)
-    # よくある末尾の会社形態を削る
+    # よくある会社形態を末尾から削る
     s = re.sub(r"(株式会社|（株）|Co\.?,?Ltd\.?|ホールディングス|HD)$", "", s, flags=re.I)
     return s
 
 
 def load_universe():
     """
-    高配当ユニバース（= あなたのリスト）だけを読み込む。
-    ここに載っている銘柄だけニュース対象。
+    高配当ユニバース（＝あなたのリスト）だけを読み込む。
+    ここに載っている企業だけニュース対象にする。
     """
     with open("data/high_yield.json", "r", encoding="utf-8") as f:
         data = json.load(f)
 
-    # あいまい一致用に key を追加（ファイルには書き戻さない）
     for r in data:
         r["key"] = normalize_name(r.get("name", ""))
-    return data  # list
+    return data  # list[dict]
 
 
 def load_seen():
@@ -49,7 +54,7 @@ def in_last_24h(entry):
         if hasattr(entry, k) and getattr(entry, k):
             ts = dt.datetime(*getattr(entry, k)[:6], tzinfo=dt.timezone.utc).astimezone(JST)
             return (dt.datetime.now(JST) - ts) <= dt.timedelta(hours=24)
-    # タイムスタンプが取れない場合はいったん採用
+    # タイムスタンプが取れないものは一応対象にする
     return True
 
 
@@ -61,21 +66,29 @@ def entry_uid(e, feed_url: str) -> str:
 
 def match_company(text: str, universe: list):
     """
-    ニュース本文から、高配当ユニバースのどの銘柄に一番近いかを判定。
-    → ユニバース外はそもそも対象にしない。
+    正規化した本文に、正規化した社名(key)が「そのまま含まれている」場合だけ採用。
+    fuzzy は使わない。
     """
-    text_n = re.sub(r"\s+", "", text or "")
-    best = (None, 0)
+    text_n = normalize_text(text)
+    hits = []
+
     for r in universe:
-        score = fuzz.partial_ratio(r["key"], text_n)
-        if score > best[1]:
-            best = (r, score)
-    # 閾値は必要に応じて調整（今は85）
-    return best if best[1] >= 85 else (None, 0)
+        key = r.get("key")
+        if not key:
+            continue
+        if key in text_n:
+            hits.append(r)
+
+    if not hits:
+        return None
+
+    # 万が一複数ヒットした場合は、社名が一番長いものを選ぶ（より固有名詞っぽい方）
+    hits.sort(key=lambda x: len(x.get("key", "")), reverse=True)
+    return hits[0]
 
 
 def run():
-    universe = load_universe()   # ★ ここには「あなたの高配当リスト」だけが入る
+    universe = load_universe()   # あなたの高配当リストだけ
     seen = load_seen()
 
     hits = []
@@ -87,13 +100,13 @@ def run():
 
             uid = entry_uid(e, url)
             if uid in seen:
-                continue  # 既に投稿済みならスキップ
+                continue  # すでに投稿済みならスキップ
 
             title = e.title or ""
             summary = getattr(e, "summary", "") or ""
             text = title + " " + summary
 
-            rec, score = match_company(text, universe)
+            rec = match_company(text, universe)
             if rec:
                 hits.append({
                     "uid": uid,
@@ -103,12 +116,15 @@ def run():
                     "link": e.link,
                     "summary": summary,
                 })
+                # デバッグ用にログ
+                print(f"HIT: {rec['code']} {rec['name']} ← {title}")
+
             time.sleep(0.05)
 
     with open("data/news_candidates.json", "w", encoding="utf-8") as f:
         json.dump(hits, f, ensure_ascii=False, indent=2)
 
-    print(f"News hits (universe only): {len(hits)}")
+    print(f"News hits (universe strict): {len(hits)}")
 
 
 if __name__ == "__main__":
