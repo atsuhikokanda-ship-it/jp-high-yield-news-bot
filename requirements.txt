@@ -6,3 +6,4 @@ feedparser
 rapidfuzz
 python-dateutil
 xlrd==2.0.1
+requests-oauthlib
