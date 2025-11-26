@@ -6,10 +6,17 @@ SEEN_PATH = "data/cache/seen.json"
 def post(text):
     r = requests.post(
         "https://api.x.com/2/tweets",
-        headers={"Authorization": f"Bearer {X_TOKEN}", "Content-Type":"application/json"},
-        json={"text": text}, timeout=30
+        headers={
+            "Authorization": f"Bearer {X_TOKEN}",
+            "Content-Type": "application/json"
+        },
+        json={"text": text},
+        timeout=30
     )
-    r.raise_for_status()
+    if not r.ok:
+        # ★ ここでエラーの中身をそのまま出す
+        print("X API error:", r.status_code, r.text)
+        r.raise_for_status()
     return r.json()["data"]["id"]
 
 def load_seen():
