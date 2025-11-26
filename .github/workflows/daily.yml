@@ -1,21 +1,32 @@
 name: daily-post
+
 on:
+  # 毎日 23:00 UTC = 日本時間 08:00(JST)
   schedule:
-    - cron: '0 23 * * *'   # JST 08:00（UTC+9）
+    - cron: '0 23 * * *'
+  # 手動実行用ボタンも付けておく
   workflow_dispatch:
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+    steps:
+      # リポジトリ取得
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Pythonセットアップ
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - run: pip install -r requirements.txt
+      # 依存パッケージをインストール
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
+      # ▼▼ 重複防止用キャッシュの復元 ▼▼
       - name: Restore seen cache
         id: cache-seen
         uses: actions/cache@v4
@@ -25,26 +36,39 @@ jobs:
           restore-keys: |
             seen-v1-
 
-      - name: Ensure seen.json exists
+      - name: Ensure data dirs
         run: |
           mkdir -p data/cache
           if [ ! -f data/cache/seen.json ]; then
             echo "[]" > data/cache/seen.json
           fi
+      # ▲▲ ここまで重複防止まわり ▲▲
 
+      # 東証の銘柄マスタ作成（社名マッチ用）
       - name: Build JPX master
+        env:
+          # jpx_master.py が FMP フォールバックを使う場合に備えて（使っていなければ secret は空でもOK）
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
         run: python src/jpx_master.py
 
+      # 高配当ユニバース作成（手動リスト版）
       - name: Build high-yield universe (>=4%)
         run: python src/high_yield.py
 
-      - name: Fetch RSS
+      # PR TIMES & @Press のRSS取得＋銘柄マッチ
+      - name: Fetch RSS (PR TIMES & @Press)
         run: python src/fetch_rss.py
 
+      # X 投稿用の短い文章に整形
       - name: Summarize
         run: python src/summarize.py
 
+      # X に投稿（該当ニュースが無ければスキップ）
       - name: Post to X (skip if none)
         env:
-          X_BEARER_TOKEN: ${{ secrets.X_BEARER_TOKEN }}
+          # OAuth1.0a 用の4つのキー（GitHub Secrets に登録済みのものを渡す）
+          X_API_KEY: ${{ secrets.X_API_KEY }}
+          X_API_SECRET: ${{ secrets.X_API_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_TOKEN_SECRET: ${{ secrets.X_ACCESS_TOKEN_SECRET }}
         run: python src/post_x.py
