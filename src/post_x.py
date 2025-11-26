@@ -58,6 +58,7 @@ def run():
             if "uid" in r and r["uid"]:
                 seen.add(r["uid"])
             time.sleep(2)
+            break  # ★ 1件投稿したら終了
         except Exception as e:
             print("skip:", e)
 
